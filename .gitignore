@@ -1,0 +1,7 @@
+.DS_Store
+__pycache__/
+*.pyc
+.sys-cache.json
+.session-cache.json
+.last-payload.json
+*.bak
