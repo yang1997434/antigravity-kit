@@ -17,7 +17,7 @@ mkdir -p "$HUD_DST"
 cp "$REPO_DIR/hud/hud.mjs" "$REPO_DIR/hud/test_hud.mjs" "$HUD_DST/"
 chmod +x "$HUD_DST/hud.mjs"
 
-echo "[3/4] Merging statusLine & 512K contextWindow into $SETTINGS_FILE"
+echo "[3/4] Merging altScreenMode, statusLine & 512K contextWindow into $SETTINGS_FILE"
 python3 - "$SETTINGS_FILE" <<'PY'
 import json, os, shutil, sys
 
@@ -31,11 +31,12 @@ if os.path.exists(path):
         if content:
             data = json.loads(content)
 
+data["altScreenMode"] = "always"
 data.setdefault("contextWindow", "512K")
 data["statusLine"] = {
     "type": "command",
     "command": "node ~/.gemini/antigravity-cli/hud/hud.mjs",
-    "enabled": true if False else True,
+    "enabled": True,
     "padding": 0,
     "stack_with_default": False,
 }
@@ -43,6 +44,9 @@ data["statusLine"] = {
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
     f.write("\n")
+os.chmod(path, 0o600)
+if os.path.exists(path + ".bak"):
+    os.remove(path + ".bak")
 PY
 
 echo "[4/4] Running verification gates..."
@@ -55,4 +59,4 @@ if command -v agy >/dev/null 2>&1; then
   agy plugin enable claude-stack >/dev/null 2>&1 || true
 fi
 
-echo "Done! Restart agy (or run /statusline in an active session) to enjoy your new setup."
+echo "Done! Restart agy (e.g. exit and run 'agy -c') to enjoy full-screen (altscreen) mode and your new setup."

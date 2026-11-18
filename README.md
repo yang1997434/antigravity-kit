@@ -1,6 +1,6 @@
 # Antigravity Kit (`claude-stack` + 3-Line HUD)
 
-一套开箱即用的 **Google Antigravity (`agy`) 全局工程配置包**：包含 **3 行 4 列高对比度实时 HUD 状态栏**、**黄金混搭多模型分工（Swarm + 7 个专职子代理）**、**工程铁律全局规则（`AGENTS.md`）**、**8 个渐进式加载 Skills** 以及 **测试门禁防吞退出码钩子**。
+一套开箱即用的 **Google Antigravity (`agy`) 全局工程配置包**：包含 **全屏无闪烁终端模式（`altscreen`）**、**3 行 4 列高对比度实时 HUD 状态栏**、**黄金混搭多模型分工（Swarm + 7 个专职子代理）**、**工程铁律全局规则（`AGENTS.md`）**、**8 个渐进式加载 Skills** 以及 **测试门禁防吞退出码钩子**。
 
 ---
 
@@ -22,9 +22,9 @@ git clone https://github.com/yang1997434/antigravity-kit.git /tmp/antigravity-ki
 
 ## 这套配置包含什么？
 
-### 1. 3 行 4 列固定列宽 HUD 状态栏（`hud/hud.mjs`）
+### 1. 全屏无闪烁渲染（`altscreen`）+ 3 行 4 列固定列宽 HUD 状态栏（`hud/hud.mjs`）
 
-替换默认单行底栏，前 3 列严格锁定列宽（数值从 `9%` 跳到 `100%` 绝不左右晃动），默认针对浅底终端采用**加粗深墨色**高对比度调色板（可在 `~/.gemini/antigravity-cli/hud/config.json` 设 `{"theme": "dark"}` 切深色模式）：
+默认开启终端备用屏幕全屏渲染（`"altScreenMode": "always"`，对齐 Claude Code 的 `/tui fullscreen`，支持鼠标滚轮滚动、独立滚动条、点击直接展开工具调用与思考块，彻底告别长会话闪烁）。同时替换默认单行底栏，前 3 列严格锁定列宽（数值从 `9%` 跳到 `100%` 绝不左右晃动），默认针对浅底终端采用**加粗深墨色**高对比度调色板（可在 `~/.gemini/antigravity-cli/hud/config.json` 设 `{"theme": "dark"}` 切深色模式）：
 
 ```text
 Ultra      ⋮ ctx      28% ⋮ cpu   13% ⋮ Gemini ●○○○○  11% ↻3h00m · 周  3%
@@ -82,9 +82,10 @@ Carbon 4   ⋮ Cache  94.3% ⋮ disk  58% ⋮ 📁 ~/workspace/my-project  ⎇ m
    - 将 `"$tmpdir/hud/hud.mjs"` 和 `"$tmpdir/hud/test_hud.mjs"` 复制进去，并执行 `chmod +x ~/.gemini/antigravity-cli/hud/hud.mjs`。
    - 如果用户的终端是**深色背景**（可询问用户或检查其现有 `theme` 配置），在 `~/.gemini/antigravity-cli/hud/config.json` 写入 `{"theme": "dark"}`；浅色背景无需额外配置。
 4. **无损合并 `~/.gemini/antigravity-cli/settings.json`**：
-   - 先用 `cp` 备份原文件（若存在），读取原 JSON 对象，**保留用户原有的 `model`、`trustedWorkspaces` 等所有字段**，仅写入/更新以下两个字段后写回并删除 `.bak`：
+   - 先用 `cp` 备份原文件（若存在），读取原 JSON 对象，**保留用户原有的 `model`、`trustedWorkspaces` 等所有字段**，仅写入/更新以下字段后写回并删除 `.bak`：
      ```json
      {
+       "altScreenMode": "always",
        "contextWindow": "512K",
        "statusLine": {
          "type": "command",
@@ -102,7 +103,7 @@ Carbon 4   ⋮ Cache  94.3% ⋮ disk  58% ⋮ 📁 ~/workspace/my-project  ⎇ m
    agy plugin validate ~/.gemini/config/plugins/claude-stack --strict --json
    rm -rf "$tmpdir"
    ```
-   全部退出码为 `0` 且 `validate` 为 `0 errors` 后，提示用户运行一次 `/statusline`（或新开会话）即可看到新 HUD 与全套子代理生效。
+   全部退出码为 `0` 且 `validate` 为 `0 errors` 后，提示用户重启一次 `agy`（如退出后运行 `agy -c` 续接当前会话）即可同时生效全屏无闪烁模式（`altscreen`）、新 HUD 与全套子代理。
 
 ---
 
