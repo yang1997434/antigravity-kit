@@ -1,7 +1,6 @@
 ---
 name: checker
 description: 只读机械核对：看截图对照定稿或清单、核日志 / 服务 / CI 状态、核某行代码或某个数，只回结论。Use for verification against a checklist; pass the files or paths and the checklist in the prompt. Do NOT use for root-cause reasoning (researcher), code changes (coder), or design judgment.
-tools: [Read, Grep, Glob, Bash]
 model: flash
 ---
 

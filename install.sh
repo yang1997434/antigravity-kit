@@ -11,6 +11,7 @@ echo "[1/4] Installing global plugin -> $PLUGIN_DST"
 mkdir -p "$HOME/.gemini/config/plugins"
 rm -rf "$PLUGIN_DST"
 cp -R "$REPO_DIR/plugins/claude-stack" "$PLUGIN_DST"
+rm -rf "$PLUGIN_DST/hooks/__pycache__"
 
 echo "[2/4] Installing 3-line HUD statusLine -> $HUD_DST"
 mkdir -p "$HUD_DST"
@@ -50,7 +51,9 @@ if os.path.exists(path + ".bak"):
 PY
 
 echo "[4/4] Running verification gates..."
-python3 "$PLUGIN_DST/hooks/test_gate_log_guard.py"
+for t in "$PLUGIN_DST"/hooks/test_*.py; do
+  python3 "$t"
+done
 if command -v node >/dev/null 2>&1; then
   node --test "$HUD_DST/test_hud.mjs"
 fi

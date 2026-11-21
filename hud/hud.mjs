@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Antigravity CLI HUD — 3-line, 4-column fixed-width statusLine (LA style).
+ * Antigravity CLI HUD — 3-line, 4-column fixed-width statusLine.
  *
- *   Ultra      ⋮ ctx      28% ⋮ cpu   20% ⋮ Gemini ●○○○○  11% ↻3h04m · 周  3%
- *   medium     ⋮ tok/s     71 ⋮ mem   65% ⋮ Claude ○○○○○   0% ↻4h57m · 周  0%
- *   Carbon 4   ⋮ Cache  95.4% ⋮ disk  58% ⋮ 📁 ~/Documents/Codex/AI_model  ⎇ HEAD*
+ *   Ultra      ⋮ ctx      28% ⋮ cpu   13% ⋮ ▸Gemini ●○○○○  11% ↻3h04m · 周  3% ↻6d22h
+ *   high       ⋮ tok/s     71 ⋮ mem   64% ⋮  Claude ○○○○○   0% ↻4h57m · 周  1% ↻3d15h
+ *   Neon 4     ⋮ Cache  95.4% ⋮ disk  58% ⋮ 📁 ~/workspace/my-project  ⎇ main*  ⚙ 2 sub · 1 bg
  *
  * Optional config: ~/.gemini/antigravity-cli/hud/config.json
- *   { "diskPath": "/", "cols": [10, 12, 9], "sep": "⋮", "theme": "light" }
+ *   { "diskPath": "/", "cols": [10, 12, 9], "sep": "⋮", "theme": "light", "label": "Ultra" }
  */
 
 import {
@@ -40,8 +40,8 @@ const COLS = Array.isArray(CFG.cols) && CFG.cols.length === 3
 
 // ── Theme-aware palette (defaults to crisp bold dark-ink on light terminal) ──
 const rgb = (r, g, b) => `\x1b[38;2;${r};${g};${b}m`;
-const themePref = String(CFG.theme || SETTINGS.theme || 'light').toLowerCase();
-const LIGHT_BG = !themePref.includes('dark');
+const themePref = String(CFG.theme || SETTINGS.colorScheme || SETTINGS.theme || 'light').toLowerCase();
+const LIGHT_BG = !themePref.includes('dark') && !themePref.includes('tokyo');
 
 export const C = LIGHT_BG ? {
   reset: '\x1b[0m', dim: `\x1b[1m${rgb(110, 110, 115)}`, bold: '\x1b[1m',
@@ -119,7 +119,7 @@ function pctVal(pct) {
     : `${healthColor(pct)}${String(pct).padStart(3)}%${C.reset}`;
 }
 
-// ── Dual Quota Pools: Gemini (5h + weekly) & Claude/3P (`3p-5h` + `3p-weekly`) ──
+// ── Multi-Pool Quota Parsing (Gemini, Claude/3p, plus optional Flash or future buckets) ──
 function bucketDiffMs(bucket, nowMs = Date.now()) {
   if (!bucket) return null;
   if (typeof bucket.reset_in_seconds === 'number') return bucket.reset_in_seconds * 1000;
@@ -157,76 +157,116 @@ function bucketUsedPct(b) {
 }
 
 function isClaudeOrThirdParty(tag) {
-  // Antigravity names the Claude/GPT-OSS quota buckets "3p-5h" and "3p-weekly" ("3p" = third-party).
   return /(?:^|[^a-z0-9])3p(?:[^a-z0-9]|$)|claude|opus|sonnet|haiku|gpt|third[-_ ]?party|anthropic/i.test(tag);
 }
 
+function isFlashBucket(tag) {
+  return /(?:^|[-_ ])flash(?:$|[-_ ])|gemini[-_ ]?flash/i.test(tag);
+}
+
 function isGeminiPool(tag) {
-  return /gemini|carbon|argon|hydrogen|flash|orchestrator/i.test(tag);
+  return /gemini|neon|carbon|argon|hydrogen|orchestrator|pro/i.test(tag);
+}
+
+function classifyBucketPool(key, tag, activeLow) {
+  if (isClaudeOrThirdParty(tag)) return { id: 'claude', label: 'Claude' };
+  if (isFlashBucket(tag)) return { id: 'flash', label: 'Flash' };
+  if (isGeminiPool(tag)) return { id: 'gemini', label: 'Gemini' };
+  const base = String(key || '').replace(/[-_](?:5h|weekly|7d|daily)$/i, '').trim();
+  if (base) {
+    const pretty = base.charAt(0).toUpperCase() + base.slice(1, 6);
+    return { id: base.toLowerCase(), label: pretty };
+  }
+  return isClaudeOrThirdParty(activeLow)
+    ? { id: 'claude', label: 'Claude' }
+    : { id: 'gemini', label: 'Gemini' };
 }
 
 export function extractQuotaPools(quotaMap, activeModel = '', nowMs = Date.now()) {
-  const res = {
-    gemini: { fiveH: null, weekly: null },
-    claude: { fiveH: null, weekly: null },
-    credits: null
+  const byId = {
+    gemini: { id: 'gemini', label: 'Gemini', fiveH: null, weekly: null },
+    claude: { id: 'claude', label: 'Claude', fiveH: null, weekly: null },
   };
-  if (!quotaMap || typeof quotaMap !== 'object') return res;
+  const extraOrder = [];
+  let credits = null;
 
-  const activeLow = String(activeModel).toLowerCase();
-  const pickBetter = (cur, cand, keyLow) => {
-    if (!cur) return cand;
-    if (activeLow && (keyLow === activeLow || activeLow.includes(keyLow))) return cand;
-    if (cand.usedPct > cur.usedPct) return cand;
-    return cur;
-  };
-
-  for (const [key, b] of Object.entries(quotaMap)) {
-    if (!b || typeof b !== 'object' || b.disabled) continue;
-    const tag = `${key} ${b.display_name || ''} ${b.description || ''}`;
-    if (/credit/i.test(tag) && typeof b.remaining_amount === 'number') {
-      res.credits = b.remaining_amount;
-      continue;
-    }
-    const u = bucketUsedPct(b);
-    if (u == null) continue;
-    const diffMs = bucketDiffMs(b, nowMs);
-    const keyLow = key.toLowerCase();
-    const winStr = `${keyLow} ${String(b.window || '').toLowerCase()}`;
-    const isWeekly = winStr.includes('week') || winStr.includes('7d')
-      || (!winStr.includes('5h') && diffMs != null && diffMs > FIVE_HOURS_MS);
-
-    const item = {
-      usedPct: Math.round(u),
-      reset: fmtDurationMs(diffMs),
-      isWeekly,
+  if (quotaMap && typeof quotaMap === 'object') {
+    const activeLow = String(activeModel).toLowerCase();
+    const pickBetter = (cur, cand, keyLow) => {
+      if (!cur) return cand;
+      if (activeLow && (keyLow === activeLow || activeLow.includes(keyLow))) return cand;
+      if (cand.usedPct > cur.usedPct) return cand;
+      return cur;
     };
 
-    const target = isClaudeOrThirdParty(tag) ? res.claude
-      : (isGeminiPool(tag) ? res.gemini
-      : (isClaudeOrThirdParty(activeLow) ? res.claude : res.gemini));
+    for (const [key, b] of Object.entries(quotaMap)) {
+      if (!b || typeof b !== 'object' || b.disabled) continue;
+      const tag = `${key} ${b.display_name || ''} ${b.description || ''}`;
+      if (/credit/i.test(tag) && typeof b.remaining_amount === 'number') {
+        credits = b.remaining_amount;
+        continue;
+      }
+      const u = bucketUsedPct(b);
+      if (u == null) continue;
+      const diffMs = bucketDiffMs(b, nowMs);
+      const keyLow = key.toLowerCase();
+      const winStr = `${keyLow} ${String(b.window || '').toLowerCase()}`;
+      const isWeekly = winStr.includes('week') || winStr.includes('7d')
+        || (!winStr.includes('5h') && diffMs != null && diffMs > FIVE_HOURS_MS);
 
-    if (isWeekly) target.weekly = pickBetter(target.weekly, item, keyLow);
-    else target.fiveH = pickBetter(target.fiveH, item, keyLow);
+      const item = {
+        usedPct: Math.round(u),
+        reset: fmtDurationMs(diffMs),
+        isWeekly,
+      };
+
+      const { id, label } = classifyBucketPool(key, tag, activeLow);
+      if (!byId[id]) {
+        byId[id] = { id, label, fiveH: null, weekly: null };
+        extraOrder.push(id);
+      }
+      const target = byId[id];
+      if (isWeekly) target.weekly = pickBetter(target.weekly, item, keyLow);
+      else target.fiveH = pickBetter(target.fiveH, item, keyLow);
+    }
   }
-  return res;
+
+  return {
+    gemini: byId.gemini,
+    claude: byId.claude,
+    byId,
+    extras: extraOrder.map(id => byId[id]),
+    credits,
+  };
+}
+
+export function detectActivePoolId(activeModel, pools) {
+  const low = String(activeModel || '').toLowerCase();
+  if (isClaudeOrThirdParty(low)) return 'claude';
+  if (/flash/i.test(low) && pools?.byId?.flash && (pools.byId.flash.fiveH || pools.byId.flash.weekly)) {
+    return 'flash';
+  }
+  return 'gemini';
 }
 
 function quotaCircles(pct) {
   const clamped = Math.min(100, Math.max(0, pct));
-  const full = clamped <= 0 ? 0 : Math.max(1, Math.round(clamped / 20));
+  const full = Math.round(clamped / 20);
   const clr = healthColor(clamped);
   return `${clr}${'●'.repeat(full)}${C.dimGray}${'○'.repeat(5 - full)}${C.reset}`;
 }
 
-// Renders `Gemini ●○○○○  11% ↻3h04m · 周  3%` (and if only weekly is present, shows weekly directly).
-function renderPoolRow(label, poolGroup, isActivePool, resetPadW = 5, credits = null) {
+// Renders `▸Gemini ●○○○○  11% ↻3h04m · 周  3% ↻6d22h`
+function renderPoolRow(poolGroup, isActivePool, labelW, resetPadW = 5, showWeeklyReset = true, extraSuffix = '') {
+  const label = poolGroup?.label || 'Quota';
+  const mark = isActivePool ? `${C.blue}▸${C.reset}` : ' ';
   const nameClr = isActivePool ? C.white : C.gray;
-  const pad = ' '.repeat(Math.max(0, 6 - dispWidth(label)));
-  const head = `${nameClr}${label}${C.reset}${pad}`;
+  const pad = ' '.repeat(Math.max(0, labelW - dispWidth(label)));
+  const head = `${mark}${nameClr}${label}${C.reset}${pad}`;
+
   const main = poolGroup?.fiveH || poolGroup?.weekly;
   if (!main || typeof main.usedPct !== 'number') {
-    return `${head} ${C.dimGray}○○○○○${C.reset} ${C.dim}  —${C.reset}`;
+    return `${head} ${C.dimGray}○○○○○${C.reset} ${C.dim}  —${C.reset}${extraSuffix}`;
   }
   const p = main.usedPct;
   const onlyWeekly = !poolGroup?.fiveH && Boolean(poolGroup?.weekly);
@@ -240,11 +280,13 @@ function renderPoolRow(label, poolGroup, isActivePool, resetPadW = 5, credits = 
   let weekPart = '';
   if (poolGroup?.fiveH && poolGroup?.weekly) {
     const wp = poolGroup.weekly.usedPct;
-    const wReset = wp >= 75 && poolGroup.weekly.reset ? ` ${C.orange}↻${poolGroup.weekly.reset}${C.reset}` : '';
+    const wResetRaw = poolGroup.weekly.reset;
+    const wReset = wResetRaw && (showWeeklyReset || wp >= 75)
+      ? ` ${wp >= 75 ? C.orange : C.dimGray}↻${wResetRaw}${C.reset}`
+      : '';
     weekPart = ` ${C.dimGray}·${C.reset} ${C.gray}周${C.reset}${healthColor(wp)}${String(wp).padStart(3)}%${C.reset}${wReset}`;
   }
-  const credPart = credits != null ? ` ${C.cyan}· 积分 ${credits}${C.reset}` : '';
-  return `${head} ${quotaCircles(p)} ${healthColor(p)}${String(p).padStart(3)}%${C.reset}${resetPart}${weekPart}${credPart}`;
+  return `${head} ${quotaCircles(p)} ${healthColor(p)}${String(p).padStart(3)}%${C.reset}${resetPart}${weekPart}${extraSuffix}`;
 }
 
 // ── Model & Effort parsing ──────────────────────────
@@ -253,8 +295,10 @@ export function parseModelAndEffort(modelObj) {
   const rawId = String(modelObj?.id || rawDisplay).toLowerCase();
 
   let effort = String(modelObj?.effort || '').toLowerCase();
-  const parenMatch = rawDisplay.match(/\((low|medium|high|xhigh|max)\)\s*$/i);
-  if (!effort && parenMatch) effort = parenMatch[1].toLowerCase();
+  const parenMatch = rawDisplay.match(/\((low|medium|high|xhigh|max|extra)\)\s*$/i);
+  if (!effort && parenMatch) {
+    effort = parenMatch[1].toLowerCase() === 'extra' ? 'xhigh' : parenMatch[1].toLowerCase();
+  }
 
   let clean = rawDisplay
     .replace(/\s*\([^)]*\)\s*$/g, '')
@@ -268,7 +312,8 @@ export function parseModelAndEffort(modelObj) {
   return { name: clean || 'Auto', effort, rawId };
 }
 
-export function formatIdentity(stdin, settings = SETTINGS) {
+export function formatIdentity(stdin, settings = SETTINGS, cfg = CFG) {
+  if (typeof cfg?.label === 'string' && cfg.label.trim()) return cfg.label.trim();
   const tierRaw = String(stdin?.plan_tier || '').trim();
   if (tierRaw) {
     const cleanTier = tierRaw
@@ -284,6 +329,17 @@ export function formatIdentity(stdin, settings = SETTINGS) {
 }
 
 // ── System stats (macOS / Linux) ────────────────────
+function readProcStat() {
+  try {
+    const line = readFileSync('/proc/stat', 'utf8').split('\n', 1)[0];
+    const parts = line.trim().split(/\s+/).slice(1).map(Number);
+    const [user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0] = parts;
+    return { total: user + nice + system + idle + iowait + irq + softirq + steal, idle: idle + iowait, ts: Date.now() };
+  } catch {
+    return cpuSampleFromCpus(cpus());
+  }
+}
+
 function cpuSampleFromCpus(list) {
   if (!Array.isArray(list) || !list.length) return null;
   let total = 0, idle = 0;
@@ -293,12 +349,12 @@ function cpuSampleFromCpus(list) {
 
 function getCpuPct() {
   let prev = loadJson(SYS_CACHE_PATH, {})?.cpu;
-  let now = cpuSampleFromCpus(cpus());
+  let now = readProcStat();
   if (!now) return null;
   if (!prev || (now.ts - prev.ts) >= 600_000 || now.total <= prev.total) {
     prev = now;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40);
-    now = cpuSampleFromCpus(cpus());
+    now = readProcStat();
   }
   let pct = null;
   const totalDiff = now.total - prev.total;
@@ -313,6 +369,17 @@ function getCpuPct() {
   return pct;
 }
 
+export function memPctFromProcMeminfo(raw) {
+  const pick = (key) => {
+    const m = String(raw).match(new RegExp(`^${key}:\\s+(\\d+)\\s*kB`, 'm'));
+    return m ? parseInt(m[1], 10) : null;
+  };
+  const total = pick('MemTotal');
+  const available = pick('MemAvailable');
+  if (!total || available == null) return null;
+  return Math.max(0, Math.min(100, Math.round(((total - available) / total) * 100)));
+}
+
 export function memPctFromVmStat(text, totalBytes) {
   const page = Number((text.match(/page size of (\d+) bytes/) || [])[1]);
   const pages = (key) => Number((text.match(new RegExp(`^${key}:\\s+(\\d+)\\.`, 'm')) || [])[1]);
@@ -322,10 +389,14 @@ export function memPctFromVmStat(text, totalBytes) {
 }
 
 function getMemPct() {
-  if (process.platform !== 'darwin') return null;
   try {
-    return memPctFromVmStat(execFileSync('vm_stat', { encoding: 'utf8', timeout: 800 }), totalmem());
-  } catch { return null; }
+    return memPctFromProcMeminfo(readFileSync('/proc/meminfo', 'utf8'));
+  } catch {
+    if (process.platform !== 'darwin') return null;
+    try {
+      return memPctFromVmStat(execFileSync('vm_stat', { encoding: 'utf8', timeout: 800 }), totalmem());
+    } catch { return null; }
+  }
 }
 
 function getDiskPct(path) {
@@ -469,11 +540,13 @@ export function fallbackCachePctFromUsage(contextWindow) {
 }
 
 // ── Path & Subagent suffix formatting ───────────────
-const CWD_MAX = 40;
+const CWD_MAX = 48;
 
 export function fmtCwd(cwd) {
   if (!cwd) return '';
-  const p = cwd.startsWith(HOME) ? '~' + cwd.slice(HOME.length) : cwd;
+  let p = cwd.startsWith(HOME) ? '~' + cwd.slice(HOME.length) : cwd;
+  const wt = p.match(/^(.*?)\/(?:\.claude|\.gemini\/[^/]+)\/worktrees\/([^/]+)$/);
+  if (wt) p = `${wt[1].split('/').pop() || wt[1]}:wt/${wt[2]}`;
   if (p.length <= CWD_MAX) return p;
   const segs = p.split('/').filter(Boolean);
   if (segs.length >= 4) {
@@ -511,11 +584,11 @@ export function buildGrid(stdin, sys = null, sessOverride = null, nowMs = Date.n
   const effCell = fit(effort ? `${effColor}${effort}${C.reset}` : `${C.dim}—${C.reset}`, COLS[0]);
 
   let modelColor = C.cyan;
-  if (/carbon|pro|opus/i.test(rawId)) modelColor = C.magenta;
-  else if (/lite|haiku/i.test(rawId)) modelColor = C.green;
+  if (/neon|carbon|pro|opus/i.test(rawId)) modelColor = C.magenta;
+  else if (/flash|lite|haiku/i.test(rawId)) modelColor = C.green;
   const modelCell = fit(`${modelColor}${modelName}${C.reset}`, COLS[0]);
 
-  // Column 2: ctx %, tok/s, Cache % (falls back to stdin.context_window.current_usage instantly)
+  // Column 2: ctx %, tok/s, Cache %
   const cw = stdin.context_window;
   const ctxPct = cw
     ? (typeof cw.used_percentage === 'number'
@@ -543,14 +616,39 @@ export function buildGrid(stdin, sys = null, sessOverride = null, nowMs = Date.n
   const memCell = metric('mem', pctVal(memPct), COLS[2]);
   const diskCell = metric('disk', pctVal(diskPct), COLS[2]);
 
-  // Column 4: Dual Quota Pools (Gemini 5h+weekly, Claude/3p 5h+weekly) + CWD / Git / Subagents
+  // Column 4: Multi-Pool Quota (with active ▸ marker, 5h + weekly + reset countdowns) + CWD / Git / Subagents
   const pools = extractQuotaPools(stdin.quota, rawId, nowMs);
-  const activeIsClaude = isClaudeOrThirdParty(rawId);
-  const r1 = (pools.gemini.fiveH || pools.gemini.weekly)?.reset || '';
-  const r2 = (pools.claude.fiveH || pools.claude.weekly)?.reset || '';
+  const activePoolId = detectActivePoolId(rawId, pools);
+  const termW = typeof stdin.terminal_width === 'number' ? stdin.terminal_width : 120;
+  const showWeeklyReset = termW >= 88;
+
+  // Choose primary 2 pool rows: always keep Gemini & Claude unless active is a 3rd pool (e.g. dedicated Flash)
+  let row1Pool = pools.gemini;
+  let row2Pool = pools.claude;
+  let extraPools = pools.extras;
+  if (activePoolId !== 'gemini' && activePoolId !== 'claude' && pools.byId[activePoolId]) {
+    row1Pool = pools.byId[activePoolId];
+    row2Pool = pools.gemini.fiveH || pools.gemini.weekly ? pools.gemini : pools.claude;
+    extraPools = [pools.claude, ...pools.extras.filter(p => p.id !== activePoolId)]
+      .filter(p => p && p.id !== row1Pool.id && p.id !== row2Pool.id && (p.fiveH || p.weekly));
+  }
+
+  const labelW = Math.max(dispWidth(row1Pool.label), dispWidth(row2Pool.label));
+  const r1 = (row1Pool.fiveH || row1Pool.weekly)?.reset || '';
+  const r2 = (row2Pool.fiveH || row2Pool.weekly)?.reset || '';
   const resetPadW = Math.max(dispWidth(r1), dispWidth(r2));
-  const gemRow = renderPoolRow('Gemini', pools.gemini, !activeIsClaude, resetPadW, pools.credits);
-  const cldRow = renderPoolRow('Claude', pools.claude, activeIsClaude, resetPadW, null);
+
+  const credSuffix = pools.credits != null ? ` ${C.cyan}· 积分 ${pools.credits}${C.reset}` : '';
+  const extraBadges = extraPools
+    .map(ep => {
+      const m = ep.fiveH || ep.weekly;
+      return m ? ` ${C.dimGray}·${C.reset} ${C.gray}${ep.label}${C.reset} ${healthColor(m.usedPct)}${m.usedPct}%${C.reset}` : '';
+    })
+    .filter(Boolean)
+    .join('');
+
+  const qRow1 = renderPoolRow(row1Pool, activePoolId === row1Pool.id, labelW, resetPadW, showWeeklyReset, credSuffix);
+  const qRow2 = renderPoolRow(row2Pool, activePoolId === row2Pool.id, labelW, resetPadW, showWeeklyReset, extraBadges);
 
   const cwd = stdin.workspace?.current_dir ?? stdin.cwd ?? '';
   const branch = stdin.vcs?.branch || '';
@@ -561,10 +659,15 @@ export function buildGrid(stdin, sys = null, sessOverride = null, nowMs = Date.n
 
   const joiner = BAR ? ` ${BAR} ` : '   ';
   return [
-    [idCell, ctxCell, cpuCell, gemRow].join(joiner),
-    [effCell, tpsCell, memCell, cldRow].join(joiner),
+    [idCell, ctxCell, cpuCell, qRow1].join(joiner),
+    [effCell, tpsCell, memCell, qRow2].join(joiner),
     [modelCell, cacheCell, diskCell, cwdCell].join(joiner),
   ];
+}
+
+export function formatOutput(lines) {
+  // Replace spaces with NBSP so terminals / TUI renderers never collapse alignment padding.
+  return lines.join('\n').replace(/ /g, '\u00a0');
 }
 
 async function readStdin() {
@@ -582,7 +685,7 @@ async function main() {
   const stdin = await readStdin();
   if (!stdin) process.exit(0);
   const lines = buildGrid(stdin);
-  if (lines.length) console.log(lines.join('\n'));
+  if (lines.length) console.log(formatOutput(lines));
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main();

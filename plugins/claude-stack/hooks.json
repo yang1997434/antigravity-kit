@@ -6,10 +6,54 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.gemini/config/plugins/claude-stack/hooks/gate-log-guard.py\" pre",
+            "command": "python3 ./hooks/gate-log-guard.py pre",
             "timeout": 10
           }
         ]
+      }
+    ]
+  },
+  "bg-shell-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./hooks/bg-shell-guard.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "agent-image-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "invoke_subagent|run_workflow|swarm",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./hooks/agent-image-guard.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "due-tasks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "python3 ./hooks/due-tasks.py",
+        "timeout": 5
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 ./hooks/due-tasks.py",
+        "timeout": 5
       }
     ]
   }

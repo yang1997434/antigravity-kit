@@ -1,4 +1,4 @@
-"""门禁输出闸的测试：python3 -m unittest ~/.gemini/config/plugins/claude-stack/hooks/test_gate_log_guard.py"""
+"""门禁输出闸的测试：python3 -m unittest test_gate_log_guard.py"""
 import importlib.util, json, os, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,12 +47,13 @@ class Rewrite(unittest.TestCase):
         self.assertTrue(g.hit("python3 -m unittest test_x.py | tail -3"))
 
     def test_unwritable_log_dir_tells_model(self):
-        home = tempfile.mkdtemp()
-        os.makedirs(os.path.join(home, ".cache"))
-        open(os.path.join(home, ".cache", "claude-gate-log"), "w").close()
-        out = run_claude("uv run pytest -q | tail -3", home=home)
-        self.assertIn("建不了日志目录", out["additionalContext"])
-        self.assertNotIn("updatedInput", out)
+        with tempfile.TemporaryDirectory() as home:
+            os.makedirs(os.path.join(home, ".cache"))
+            with open(os.path.join(home, ".cache", "claude-gate-log"), "w", encoding="utf-8"):
+                pass
+            out = run_claude("uv run pytest -q | tail -3", home=home)
+            self.assertIn("建不了日志目录", out["additionalContext"])
+            self.assertNotIn("updatedInput", out)
 
     def test_heredoc_not_rewritten(self):
         cmd = "python3 - <<'EOF'\nprint('pytest | tail')\nEOF\npytest -q | tail -3"
@@ -78,7 +79,8 @@ class Hook(unittest.TestCase):
             out = run_claude("pytest -q 2>&1 | tail -3", home=home)
             self.assertEqual(out["permissionDecision"], "allow")
             self.assertIn("set -o pipefail; pytest -q 2>&1 | tee ", out["updatedInput"]["command"])
-            hits = open(os.path.join(home, ".cache/claude-gate-log/hits.jsonl"), encoding="utf-8").read().splitlines()
+            with open(os.path.join(home, ".cache/claude-gate-log/hits.jsonl"), encoding="utf-8") as f:
+                hits = f.read().splitlines()
             self.assertTrue(json.loads(hits[0])["rewritten"])
 
     def test_antigravity_simple_test_rewrites_and_allows(self):
