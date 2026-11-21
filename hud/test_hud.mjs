@@ -172,3 +172,63 @@ test('resolveTranscriptPath falls back from .gemini/antigravity/ to actual .gemi
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('parseModelAndEffort formats Orchestrator models with orch effort and compact planner label', () => {
+  const neon = parseModelAndEffort({ id: 'Orchestrator (Neon)', display_name: 'Orchestrator (Neon)' });
+  assert.equal(neon.name, 'Neon → H4');
+  assert.equal(neon.effort, 'orch');
+  assert.equal(neon.isOrchestrator, true);
+
+  const carbon = parseModelAndEffort({ id: 'Orchestrator (Carbon)', display_name: 'Orchestrator (Carbon)' });
+  assert.equal(carbon.name, 'Carbon→H4');
+  assert.equal(carbon.effort, 'orch');
+  assert.equal(carbon.isOrchestrator, true);
+
+  const argon = parseModelAndEffort({ id: 'Orchestrator (Argon)', display_name: 'Orchestrator (Argon)' });
+  assert.equal(argon.name, 'Argon → H4');
+  assert.equal(argon.effort, 'orch');
+  assert.equal(argon.isOrchestrator, true);
+
+  const byId = parseModelAndEffort({ id: 'gemini-pro-orchestrator-neon', display_name: '' });
+  assert.equal(byId.name, 'Neon → H4');
+  assert.equal(byId.effort, 'orch');
+  assert.equal(byId.isOrchestrator, true);
+});
+
+test('buildGrid renders Orchestrator (Neon) with orch / orch·plan and Neon → H4 without truncation or misalignment', () => {
+  const sys = { cpu: 15, mem: 60, disk: 55 };
+  const sepPositions = (row) => {
+    const plain = strip(row);
+    const idxs = [];
+    for (let i = 0; i < plain.length; i++) if (plain[i] === '⋮') idxs.push(dispWidth(plain.slice(0, i)));
+    return idxs;
+  };
+  const base = {
+    plan_tier: 'Google AI Ultra',
+    model: { id: 'Orchestrator (Neon)', display_name: 'Orchestrator (Neon)' },
+    context_window: { used_percentage: 12 },
+    quota: {
+      'gemini-5h': { remaining_fraction: 0.9, reset_in_seconds: 12000 },
+      'gemini-weekly': { remaining_fraction: 0.98, reset_in_seconds: 500000 },
+      '3p-5h': { remaining_fraction: 1.0, reset_in_seconds: 17000 },
+      '3p-weekly': { remaining_fraction: 0.99, reset_in_seconds: 300000 },
+    },
+    cycle_mode: 'auto',
+    cwd: '/Users/demo/project',
+    terminal_width: 120,
+  };
+
+  const rowsAuto = buildGrid(base, sys, { tps: 50, cachePct: 95, cacheWarm: true });
+  const expected = sepPositions(rowsAuto[0]);
+  for (const r of rowsAuto) assert.deepEqual(sepPositions(r), expected, `misaligned: ${strip(r)}`);
+  assert.match(strip(rowsAuto[1]), /^orch\s+⋮/);
+  assert.doesNotMatch(strip(rowsAuto[1]), /^—\s+⋮/);
+  assert.match(strip(rowsAuto[2]), /^Neon → H4\s+⋮/);
+  assert.ok(!strip(rowsAuto[2]).includes('…'), 'model cell must not truncate');
+  assert.ok(rowsAuto[2].includes(C.magenta), 'Orchestrator (Neon) should use flagship magenta color');
+
+  const rowsPlan = buildGrid({ ...base, cycle_mode: 'plan' }, sys, { tps: 50, cachePct: 95, cacheWarm: true });
+  for (const r of rowsPlan) assert.deepEqual(sepPositions(r), expected, `misaligned plan: ${strip(r)}`);
+  assert.match(strip(rowsPlan[1]), /^orch·plan\s+⋮/);
+  assert.match(strip(rowsPlan[2]), /^Neon → H4\s+⋮/);
+});

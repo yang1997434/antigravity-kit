@@ -294,6 +294,32 @@ export function parseModelAndEffort(modelObj) {
   const rawDisplay = String(modelObj?.display_name || modelObj?.id || '').trim();
   const rawId = String(modelObj?.id || rawDisplay).toLowerCase();
 
+  const orchDisp = rawDisplay.match(/^Orchestrator(?:\s*\(([^)]+)\))?$/i);
+  if (orchDisp || /orchestrator/i.test(rawId)) {
+    let rawPlanner = orchDisp?.[1]?.trim() || '';
+    if (!rawPlanner) {
+      const idMatch = rawId.match(/^gemini-pro-orchestrator-(neon|carbon|argon)$/i);
+      if (idMatch) rawPlanner = idMatch[1];
+      else if (rawId === 'gemini-pro-orchestrator') rawPlanner = 'Carbon';
+    }
+    const planner = rawPlanner
+      ? rawPlanner.charAt(0).toUpperCase() + rawPlanner.slice(1).toLowerCase()
+      : '';
+    let name = 'Orch';
+    if (planner) {
+      const spaced = `${planner} → H4`;
+      const tight = `${planner}→H4`;
+      name = dispWidth(spaced) <= 10 ? spaced : (dispWidth(tight) <= 10 ? tight : planner);
+    }
+    return {
+      name,
+      effort: 'orch',
+      rawId,
+      isOrchestrator: true,
+      planner: planner.toLowerCase(),
+    };
+  }
+
   let effort = String(modelObj?.effort || '').toLowerCase();
   const parenMatch = rawDisplay.match(/\((low|medium|high|xhigh|max|extra)\)\s*$/i);
   if (!effort && parenMatch) {
@@ -309,7 +335,7 @@ export function parseModelAndEffort(modelObj) {
   if (gemMatch) clean = `${gemMatch[2]} ${gemMatch[1]}`;
   else clean = clean.replace(/^Claude\s+/i, '');
 
-  return { name: clean || 'Auto', effort, rawId };
+  return { name: clean || 'Auto', effort, rawId, isOrchestrator: false };
 }
 
 export function formatIdentity(stdin, settings = SETTINGS, cfg = CFG) {
@@ -579,13 +605,18 @@ export function buildGrid(stdin, sys = null, sessOverride = null, nowMs = Date.n
   const rawIdentity = formatIdentity(stdin);
   const idCell = fit(`${C.white}${rawIdentity}${C.reset}`, COLS[0]);
 
-  const { name: modelName, effort, rawId } = parseModelAndEffort(stdin.model || { display_name: SETTINGS.model });
-  const effColor = { low: C.green, medium: C.cyan, high: C.blue, xhigh: C.magenta, max: C.red }[effort] || C.white;
-  const effCell = fit(effort ? `${effColor}${effort}${C.reset}` : `${C.dim}—${C.reset}`, COLS[0]);
+  const { name: modelName, effort, rawId, isOrchestrator, planner } = parseModelAndEffort(stdin.model || { display_name: SETTINGS.model });
+  const effText = isOrchestrator && stdin.cycle_mode === 'plan' ? 'orch·plan' : effort;
+  const effColor = {
+    low: C.green, medium: C.cyan, high: C.blue, xhigh: C.magenta, max: C.red,
+    orch: C.blue, 'orch·plan': C.magenta,
+  }[effText] || C.white;
+  const effCell = fit(effText ? `${effColor}${effText}${C.reset}` : `${C.dim}—${C.reset}`, COLS[0]);
 
+  const colorTarget = isOrchestrator ? (planner || rawId) : rawId;
   let modelColor = C.cyan;
-  if (/neon|carbon|pro|opus/i.test(rawId)) modelColor = C.magenta;
-  else if (/flash|lite|haiku/i.test(rawId)) modelColor = C.green;
+  if (/neon|carbon|pro|opus/i.test(colorTarget)) modelColor = C.magenta;
+  else if (/flash|lite|haiku/i.test(colorTarget)) modelColor = C.green;
   const modelCell = fit(`${modelColor}${modelName}${C.reset}`, COLS[0]);
 
   // Column 2: ctx %, tok/s, Cache %
